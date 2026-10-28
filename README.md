@@ -1,75 +1,45 @@
-# diabetes-risk-prediction
-Comparative machine learning benchmarks and SHAP explainability for diabetes risk prediction across CDC BRFSS cohorts.
-# Comparative Machine Learning for Diabetes Risk Prediction Across CDC BRFSS Cohorts
+# Diabetes Risk Prediction on CDC BRFSS 2015
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Dataset: CDC BRFSS](https://img.shields.io/badge/Dataset-CDC%20BRFSS-green.svg)](https://www.cdc.gov/brfss/)
+Machine learning pipeline that compares models and class-imbalance strategies for predicting diabetes risk from survey-based health indicators, with a fairness audit across sex and age group.
 
-This repository implements a comparative biostatistical and machine learning evaluation for population-level diabetes risk prediction using survey cohorts from the **Centers for Disease Control and Prevention (CDC) Behavioral Risk Factor Surveillance System (BRFSS)**. 
+## Dataset
+- **Source:** [Diabetes Health Indicators Dataset (Kaggle, Alex Teboul)](https://www.kaggle.com/datasets/alexteboul/diabetes-health-indicators-dataset), a cleaned version of the CDC Behavioral Risk Factor Surveillance System (BRFSS) 2015 survey.
+- **File used:** `diabetes_binary_health_indicators_BRFSS2015.csv`
+- **Size:** 253,680 respondents, 21 features plus the target.
+- **Target:** `Diabetes_binary` (1 = diabetic or pre-diabetic, 13.9% of respondents).
+- The data file is not included in this repo. Download it from the link above.
 
-The project benchmarks tree-based ensembles (XGBoost, LightGBM, Random Forest, CatBoost) against linear baselines, enforces strict cross-validation isolation to prevent synthetic data leakage, and provides clinical interpretability via **SHAP (Shapley Additive Explanations)** and demographic parity audits.
+## Method
+1. **Feature engineering:** BMI x general health, age x physical health days, chronic-condition count, and a weighted comorbidity risk score.
+2. **Split:** stratified 80/20 train/test split (50,736 test rows, same 13.9% prevalence).
+3. **Leakage prevention:** the scaler and all resampling methods are fitted on the training data only. The test set is never resampled.
+4. **Imbalance strategies:** raw (no rebalancing), SMOTE, random under-sampling, and class weighting.
+5. **Models:** Logistic Regression, Random Forest, Gradient Boosting, XGBoost, LightGBM (selected model and strategy pairs, see the notebook).
+6. **Evaluation:** ROC-AUC, accuracy, balanced accuracy, precision, recall and F1 for the positive (diabetic) class on the held-out test set.
+7. **Explainability:** LightGBM feature importance.
+8. **Fairness audit:** demographic parity difference and equalized odds difference across sex and age group (under 60 vs 60 and over).
 
----
+## Key results (test set, positive-class metrics)
+| Strategy | Model | ROC-AUC | Recall | Precision | F1 |
+|---|---|---|---|---|---|
+| Class weighted | LightGBM | 0.827 | 0.793 | 0.306 | 0.442 |
+| Class weighted | Logistic Regression | 0.820 | 0.763 | 0.309 | 0.440 |
+| Under-sampling | Gradient Boosting | 0.826 | 0.796 | 0.304 | 0.440 |
+| SMOTE | Random Forest | 0.820 | 0.560 | 0.389 | 0.459 |
+| Raw (no rebalancing) | LightGBM | 0.827 | 0.152 | 0.564 | 0.240 |
 
-## 1. Epidemiological Cohorts & Study Architecture
+**Takeaways**
+- All models reach a similar ROC-AUC (about 0.82-0.83). Gradient boosting gives only a small gain over Logistic Regression.
+- Without rebalancing, models miss about 85% of diabetic cases (recall 0.15) even though accuracy looks high (0.87).
+- Class weighting and under-sampling raise recall to about 0.79 at the cost of precision, which suits a screening use case where missing a case is costlier than a false alarm.
 
-The empirical benchmarks evaluate population-level chronic disease surveillance across standardized BRFSS cohort releases:
+## Limitations
+- BRFSS is a self-reported survey, so labels and features contain reporting error. The data is from 2015.
+- About 9.5% of rows (roughly 24,000) are exact duplicates and were not removed, which can slightly inflate test scores.
+- Single train/test split and fixed hyperparameters (no tuning or cross-validation).
+- The dataset has no race column, so the fairness audit covers sex and age group only.
+- This is a learning and portfolio project, not a clinical tool.
 
-| Cohort / Study Reference | Survey Release Year | Cohort Sample Size ($N$) | Predictors | Target Framework | Baseline Imbalance Ratio |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Liu et al. (2024)** | 2015 | 253,680 records | 21 features (7 continuous, 14 categorical) | Binary: 0 (Non-diabetic) vs. 1 (Prediabetes/Diabetes) | ~1:6.25 (Class 1 prevalence $\approx 16\%$) |
-| **Nabila et al. (2026)** | 2024 | 454,774 records (363,819 train / 90,955 test) | 21 features (post-feature selection) | Multiclass (3-class): Non-diabetic, Pre-diabetic, Diabetic | Highly Imbalanced (Pre-diabetic minority) |
-| **Experimental Subset** | Benchmark split | 70,692 stratified records | 21 clinical & socioeconomic features | Binary (0 / 1) | Controlled validation subset |
-
----
-
-## 2. Class Imbalance Protocol & Leakage Prevention
-
-In population health datasets, non-diabetic controls heavily outnumber diabetic cases. Standard models defaulting to global accuracy suffer from the **Accuracy Paradox**—achieving over 83% nominal accuracy while failing to identify high-risk individuals.
-
-To address this without compromising statistical validity:
-1. **Fold Isolation (Zero-Leakage Guarantee):** Resampling via **SMOTE / SMOTE-N** is applied **strictly within the training folds** of each cross-validation split using `imblearn.pipeline.Pipeline`. Validation and test partitions remain completely un-resampled, preserving true population prevalence.
-2. **Cost-Sensitive Weighting:** Incorporates inverse class-frequency penalization (`class_weight="balanced"`) to penalize minority false negatives without synthetic point interpolation.
-3. **Hyperparameter Optimization:** Utilizes **Optuna** (Tree-structured Parzen Estimator) targeting **Macro $F_1$-score** rather than raw accuracy across 5-fold cross-validation, counteracting minority-class suppression.
-
----
-
-## 3. Comparative Benchmark Results
-
-### Binary Classification Performance (80/20 Stratified Split)
-
-| Model Architecture | ROC-AUC | Accuracy | Precision (Class 1) | Recall (Class 1) | Positive-Class $F_1$ | Macro $F_1$ |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **LightGBM** | **0.83** | **83.0%** | **0.85** | **0.87** | **0.86** | **0.85** |
-| **XGBoost** | **0.83** | **83.0%** | **0.84** | **0.86** | **0.85** | **0.85** |
-| **Logistic Regression (Baseline)** | 0.81 | 82.3% | 0.82 | 0.84 | 0.83 | 0.82 |
-| **Random Forest** | 0.80 | 82.6% | 0.83 | 0.85 | 0.84 | 0.83 |
-
-* **Finding:** Gradient-boosted ensembles (**LightGBM** and **XGBoost**) demonstrated the highest discriminative power (**AUC: 0.83**), outperforming linear baselines by capturing complex non-linear interactions across BMI, physical health days, and age cohorts.
-
----
-
-## 4. Model Explainability & Clinical Risk Attribution (SHAP)
-
-Global and local decision boundaries were audited using **TreeSHAP** to verify alignment with established clinical pathophysiology:
-
-1. **Primary Positive Risk Drivers:** 
-   * **`GenHlth` (Self-reported General Health Rating):** Strongest non-linear predictor.
-   * **`BMI` (Body Mass Index):** Elevated BMI sharply shifts SHAP values positively toward diabetes categorization.
-   * **`HighBP` (Hypertension Status) & `Age`:** Substantial additive contribution in older demographics.
-2. **Protective Indicators:** 
-   * Higher **`Income`** and regular **`PhysActivity`** demonstrated negative attribution weights, decreasing predicted probability of disease onset.
-3. **Algorithmic Fairness Audit:** Evaluated across demographic subgroups (e.g. sex/gender). Equalized Odds Difference and Demographic Parity metrics showed minimal variance, ensuring that model predictions do not induce disparities in clinical screening.
-
----
-
-## 5. Repository Structure
-
-```text
-├── notebooks/
-│   └── diabetes_risk_prediction.ipynb   # Interactive analysis & visualization
-├── src/
-│   └── diabetes_risk_prediction.py      # Production training and evaluation pipeline
-├── requirements.txt                     # Python dependencies
-└── README.md                            # Comprehensive biostatistical report
+## How to run
+1. Open `diabetes_ml_pipeline_real_BRFSS.ipynb` in Google Colab.
+2. Run all cells. When prompted, upload the CSV from the Kaggle link above.
